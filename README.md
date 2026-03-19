@@ -19,13 +19,12 @@ The runtime model follows the same core semantics as the Python SDK:
 ## Install
 
 ```bash
-npm install linuxdospace
+npm install github:MoYeRanqianzhi/LinuxDoSpaceNodeSDK
 ```
 
 Local repository development:
 
 ```bash
-cd sdk/nodejs
 npm install
 npm run build
 ```
@@ -92,6 +91,11 @@ try {
 
 ```ts
 import { Client, Suffix } from "linuxdospace";
+
+## Release Note
+
+The current release workflow publishes GitHub Release artifacts and `npm pack` tarballs.
+It does not publish to the public npm registry yet.
 
 const client = await Client.connect({ token: "your-api-token" });
 const group = client.mail.bindMany(

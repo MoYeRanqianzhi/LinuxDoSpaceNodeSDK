@@ -463,7 +463,7 @@ export class Client {
   private async consumeStreamOnce(): Promise<void> {
     const controller = new AbortController();
     this.activeAbortController = controller;
-    const timeout = setTimeout(() => controller.abort(), this.connectTimeoutMs);
+    let connectTimeout: ReturnType<typeof setTimeout> | null = setTimeout(() => controller.abort(), this.connectTimeoutMs);
 
     try {
       const response = await fetch(`${this.baseUrl}${STREAM_PATH}`, {
@@ -483,6 +483,11 @@ export class Client {
       }
       if (response.body === null) {
         throw new StreamError("stream response body is empty");
+      }
+
+      if (connectTimeout !== null) {
+        clearTimeout(connectTimeout);
+        connectTimeout = null;
       }
 
       this.connectedValue = true;
@@ -524,7 +529,9 @@ export class Client {
       }
       throw new StreamError(`failed to open LinuxDoSpace mail stream: ${unknown.message}`);
     } finally {
-      clearTimeout(timeout);
+      if (connectTimeout !== null) {
+        clearTimeout(connectTimeout);
+      }
       this.activeAbortController = null;
     }
   }
@@ -726,10 +733,10 @@ async function parseMailEvent(payload: Record<string, unknown>): Promise<ParsedE
   if (rawMessageBase64.length === 0) {
     throw new StreamError("mail event did not include raw_message_base64");
   }
-  const rawBytes = Buffer.from(rawMessageBase64, "base64");
-  if (rawBytes.length === 0 && rawMessageBase64.length > 0) {
+  if (!isStrictBase64(rawMessageBase64)) {
     throw new StreamError("mail event contained invalid base64 message data");
   }
+  const rawBytes = Buffer.from(rawMessageBase64, "base64");
 
   const parsed = (await simpleParser(rawBytes)) as ParsedMailLike;
   const headers = mapHeaders(parsed.headerLines);
@@ -878,6 +885,17 @@ function normalizeError(error: unknown): Error {
     return error;
   }
   return new Error(String(error));
+}
+
+function isStrictBase64(value: string): boolean {
+  const normalized = value.replace(/\s+/g, "");
+  if (normalized.length === 0 || normalized.length % 4 !== 0) {
+    return false;
+  }
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(normalized)) {
+    return false;
+  }
+  return Buffer.from(normalized, "base64").toString("base64") === normalized;
 }
 
 function sleep(ms: number): Promise<void> {
