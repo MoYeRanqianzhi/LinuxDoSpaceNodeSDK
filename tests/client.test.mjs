@@ -3,6 +3,9 @@ import test from "node:test";
 
 import { Client, Suffix } from "../dist/index.js";
 
+const TEST_OWNER_USERNAME = "testuser";
+const TEST_NAMESPACE_SUFFIX = `${TEST_OWNER_USERNAME}.linuxdo.space`;
+
 function createControllableStream() {
   let controllerRef = null;
   const pendingLines = [];
@@ -65,7 +68,8 @@ async function waitFor(predicate, timeoutMs = 1_000) {
 function makeReadyLine() {
   return JSON.stringify({
     type: "ready",
-    token_public_id: "tok_123"
+    token_public_id: "tok_123",
+    owner_username: TEST_OWNER_USERNAME
   });
 }
 
@@ -133,7 +137,7 @@ test("client.mail.route preserves bind order and overlap semantics", async () =>
       suffix: Suffix.linuxdo_space
     });
 
-    const routed = client.mail.route(makeMessage("alice@linuxdo.space"));
+    const routed = client.mail.route(makeMessage(`alice@${TEST_NAMESPACE_SUFFIX}`));
     assert.equal(routed.length, 2);
     assert.equal(routed[0], catchAll);
     assert.equal(routed[1], alice);
@@ -172,12 +176,12 @@ test("mailboxes receive the concrete recipient address for multi-recipient mail"
     const aliceNext = aliceIterator.next();
     const bobNext = bobIterator.next();
 
-    stream.emitLine(makeMailLine(["alice@linuxdo.space", "bob@linuxdo.space"]));
+    stream.emitLine(makeMailLine([`alice@${TEST_NAMESPACE_SUFFIX}`, `bob@${TEST_NAMESPACE_SUFFIX}`]));
 
     const aliceResult = await aliceNext;
     const bobResult = await bobNext;
-    assert.equal(aliceResult.value?.address, "alice@linuxdo.space");
-    assert.equal(bobResult.value?.address, "bob@linuxdo.space");
+    assert.equal(aliceResult.value?.address, `alice@${TEST_NAMESPACE_SUFFIX}`);
+    assert.equal(bobResult.value?.address, `bob@${TEST_NAMESPACE_SUFFIX}`);
   } finally {
     client.close();
     await client.closed();

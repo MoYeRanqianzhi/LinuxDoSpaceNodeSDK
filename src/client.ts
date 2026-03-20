@@ -1,7 +1,8 @@
 import { simpleParser } from "mailparser";
 import { AsyncQueue } from "./asyncQueue.js";
 import { AuthenticationError, LinuxDoSpaceError, StreamError } from "./errors.js";
-import type { ClientOptions, MailBindingSpec, MailMessage, Suffix } from "./types.js";
+import { Suffix } from "./types.js";
+import type { ClientOptions, MailBindingSpec, MailMessage } from "./types.js";
 
 const DEFAULT_BASE_URL = "https://api.linuxdo.space";
 const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
@@ -328,6 +329,7 @@ export class Client {
   private connectedValue = false;
   private fatalError: Error | null = null;
   private activeAbortController: AbortController | null = null;
+  private ownerUsername: string | null = null;
   private readonly runnerPromise: Promise<void>;
 
   public readonly mail: MailBindingFacade;
@@ -515,11 +517,6 @@ export class Client {
       }
 
       this.connectedValue = true;
-      if (!this.initialSettled) {
-        this.initialSettled = true;
-        this.resolveInitialReady();
-      }
-
       reader = response.body.getReader();
       const decoder = new TextDecoder("utf-8");
       let buffered = "";
@@ -532,6 +529,9 @@ export class Client {
           const finalLine = buffered.trim();
           if (finalLine.length > 0) {
             await this.handleStreamLine(finalLine);
+          }
+          if (this.running && !this.initialSettled) {
+            throw new StreamError("mail stream ended before ready event");
           }
           return;
         }
@@ -587,7 +587,11 @@ export class Client {
     if (type.length === 0) {
       throw new StreamError("received stream event without a type field");
     }
-    if (type === "ready" || type === "heartbeat") {
+    if (type === "ready") {
+      this.handleReadyEvent(payload);
+      return;
+    }
+    if (type === "heartbeat") {
       return;
     }
     if (type !== "mail") {
@@ -657,7 +661,7 @@ export class Client {
       throw new ValueError("exactly one of prefix or pattern must be provided");
     }
 
-    const suffix = String(input.suffix).trim().toLowerCase();
+    const suffix = this.resolveBindingSuffix(input.suffix);
     if (suffix.length === 0) {
       throw new ValueError("suffix must not be empty");
     }
@@ -761,6 +765,35 @@ export class Client {
     for (const mailbox of this.mailboxes) {
       mailbox.fail(error);
     }
+  }
+
+  private handleReadyEvent(payload: Record<string, unknown>): void {
+    const ownerUsername = String(payload.owner_username ?? "").trim().toLowerCase();
+    if (ownerUsername.length === 0) {
+      throw new StreamError("LinuxDoSpace ready event did not include owner_username");
+    }
+
+    this.ownerUsername = ownerUsername;
+    if (!this.initialSettled) {
+      this.initialSettled = true;
+      this.resolveInitialReady();
+    }
+  }
+
+  private resolveBindingSuffix(input: Suffix | string): string {
+    const suffix = String(input).trim().toLowerCase();
+    if (suffix.length === 0) {
+      return suffix;
+    }
+    if (suffix !== Suffix.linuxdo_space) {
+      return suffix;
+    }
+
+    const ownerUsername = (this.ownerUsername ?? "").trim().toLowerCase();
+    if (ownerUsername.length === 0) {
+      throw new StreamError("stream bootstrap did not provide owner_username required to resolve Suffix.linuxdo_space");
+    }
+    return `${ownerUsername}.${suffix}`;
   }
 }
 

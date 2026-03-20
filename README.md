@@ -16,6 +16,11 @@ The runtime model follows the same core semantics as the Python SDK:
 - `allowOverlap=true` continues matching
 - mailbox queues activate only while `mailbox.listen()` is active
 
+Important:
+
+- `Suffix.linuxdo_space` is semantic, not literal
+- the SDK resolves it to `<owner_username>.linuxdo.space` after `ready.owner_username`
+
 ## Install
 
 ```bash

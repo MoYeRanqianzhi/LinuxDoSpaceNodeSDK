@@ -1,5 +1,9 @@
 /**
- * Suffix defines known LinuxDoSpace mailbox root suffixes.
+ * Suffix defines known LinuxDoSpace mailbox namespace suffixes.
+ *
+ * `Suffix.linuxdo_space` is semantic rather than literal: bindings resolve it
+ * to `<owner_username>.linuxdo.space` after the stream `ready` event provides
+ * `owner_username`.
  */
 export enum Suffix {
   linuxdo_space = "linuxdo.space"
