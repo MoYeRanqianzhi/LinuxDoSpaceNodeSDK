@@ -5,8 +5,12 @@ import type { ClientOptions, MailBindingSpec, MailMessage, Suffix } from "./type
 
 const DEFAULT_BASE_URL = "https://api.linuxdo.space";
 const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
+const DEFAULT_STREAM_TIMEOUT_MS = 30_000;
 const DEFAULT_RECONNECT_DELAY_MS = 300;
 const STREAM_PATH = "/v1/token/email/stream";
+const CONNECT_TIMEOUT_ABORT_REASON = "linuxdospace-connect-timeout";
+const STREAM_TIMEOUT_ABORT_REASON = "linuxdospace-stream-timeout";
+const CLOSE_ABORT_REASON = "linuxdospace-client-close";
 
 type BindingMode = "exact" | "pattern";
 
@@ -311,6 +315,7 @@ export class Client {
   private readonly token: string;
   private readonly baseUrl: string;
   private readonly connectTimeoutMs: number;
+  private readonly streamTimeoutMs: number;
   private readonly reconnectDelayMs: number;
   private readonly allListeners = new Set<AsyncQueue<MailMessage>>();
   private readonly bindingsBySuffix = new Map<string, MailBinding[]>();
@@ -331,12 +336,16 @@ export class Client {
     this.token = options.token.trim();
     this.baseUrl = normalizeBaseUrl(options.baseUrl ?? DEFAULT_BASE_URL);
     this.connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
+    this.streamTimeoutMs = options.streamTimeoutMs ?? DEFAULT_STREAM_TIMEOUT_MS;
     this.reconnectDelayMs = options.reconnectDelayMs ?? DEFAULT_RECONNECT_DELAY_MS;
     if (this.token.length === 0) {
       throw new ValueError("token must not be empty");
     }
     if (this.connectTimeoutMs <= 0) {
       throw new ValueError("connectTimeoutMs must be greater than 0");
+    }
+    if (this.streamTimeoutMs <= 0) {
+      throw new ValueError("streamTimeoutMs must be greater than 0");
     }
     if (this.reconnectDelayMs <= 0) {
       throw new ValueError("reconnectDelayMs must be greater than 0");
@@ -411,7 +420,7 @@ export class Client {
     }
     this.running = false;
     this.connectedValue = false;
-    this.activeAbortController?.abort();
+    this.activeAbortController?.abort(CLOSE_ABORT_REASON);
 
     for (const listener of this.allListeners) {
       listener.close();
@@ -463,7 +472,22 @@ export class Client {
   private async consumeStreamOnce(): Promise<void> {
     const controller = new AbortController();
     this.activeAbortController = controller;
-    let connectTimeout: ReturnType<typeof setTimeout> | null = setTimeout(() => controller.abort(), this.connectTimeoutMs);
+    let connectTimeout: ReturnType<typeof setTimeout> | null = setTimeout(
+      () => controller.abort(CONNECT_TIMEOUT_ABORT_REASON),
+      this.connectTimeoutMs
+    );
+    let idleTimeout: ReturnType<typeof setTimeout> | null = null;
+    const clearIdleTimeout = (): void => {
+      if (idleTimeout !== null) {
+        clearTimeout(idleTimeout);
+        idleTimeout = null;
+      }
+    };
+    const resetIdleTimeout = (): void => {
+      clearIdleTimeout();
+      idleTimeout = setTimeout(() => controller.abort(STREAM_TIMEOUT_ABORT_REASON), this.streamTimeoutMs);
+    };
+    let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
 
     try {
       const response = await fetch(`${this.baseUrl}${STREAM_PATH}`, {
@@ -496,15 +520,22 @@ export class Client {
         this.resolveInitialReady();
       }
 
-      const reader = response.body.getReader();
+      reader = response.body.getReader();
       const decoder = new TextDecoder("utf-8");
       let buffered = "";
+      resetIdleTimeout();
 
       while (this.running) {
         const { done, value } = await reader.read();
         if (done) {
+          buffered += decoder.decode();
+          const finalLine = buffered.trim();
+          if (finalLine.length > 0) {
+            await this.handleStreamLine(finalLine);
+          }
           return;
         }
+        resetIdleTimeout();
         buffered += decoder.decode(value, { stream: true });
         let newlineIndex = buffered.indexOf("\n");
         while (newlineIndex >= 0) {
@@ -521,17 +552,25 @@ export class Client {
         throw error;
       }
       const unknown = normalizeError(error);
-      if (unknown.message.includes("aborted")) {
-        if (!this.running) {
+      if (controller.signal.aborted) {
+        const reason = String(controller.signal.reason ?? "");
+        if (!this.running || reason === CLOSE_ABORT_REASON) {
           return;
         }
-        throw new StreamError("timed out while opening the LinuxDoSpace HTTPS mail stream");
+        if (reason === STREAM_TIMEOUT_ABORT_REASON) {
+          throw new StreamError("mail stream stalled and will reconnect");
+        }
+        if (reason === CONNECT_TIMEOUT_ABORT_REASON) {
+          throw new StreamError("timed out while opening the LinuxDoSpace HTTPS mail stream");
+        }
       }
       throw new StreamError(`failed to open LinuxDoSpace mail stream: ${unknown.message}`);
     } finally {
       if (connectTimeout !== null) {
         clearTimeout(connectTimeout);
       }
+      clearIdleTimeout();
+      reader?.releaseLock();
       this.activeAbortController = null;
     }
   }

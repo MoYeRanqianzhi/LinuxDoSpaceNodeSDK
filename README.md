@@ -92,11 +92,6 @@ try {
 ```ts
 import { Client, Suffix } from "linuxdospace";
 
-## Release Note
-
-The current release workflow publishes GitHub Release artifacts and `npm pack` tarballs.
-It does not publish to the public npm registry yet.
-
 const client = await Client.connect({ token: "your-api-token" });
 const group = client.mail.bindMany(
   client.mail.spec({ pattern: ".*", suffix: Suffix.linuxdo_space, allowOverlap: true }),
@@ -114,6 +109,11 @@ try {
   client.close();
 }
 ```
+
+## Release Note
+
+The current release workflow publishes GitHub Release artifacts and `npm pack` tarballs.
+It does not publish to the public npm registry yet.
 
 ## Local Routing Helper
 
@@ -150,3 +150,9 @@ try {
 - `AuthenticationError`: token rejected (`401/403`)
 - `StreamError`: stream connection or NDJSON decode failure
 - `LinuxDoSpaceError`: base SDK error type
+
+## Connection Tuning
+
+- `connectTimeoutMs` controls the initial stream-open timeout.
+- `streamTimeoutMs` controls the idle timeout after the stream is already open.
+- `reconnectDelayMs` controls the delay before retrying recoverable stream failures.

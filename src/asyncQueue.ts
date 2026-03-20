@@ -4,7 +4,10 @@
  */
 export class AsyncQueue<T> {
   private readonly values: T[] = [];
-  private readonly waitingResolvers: Array<(value: T | null) => void> = [];
+  private readonly waitingResolvers: Array<{
+    resolve: (value: T | null) => void;
+    reject: (error: Error) => void;
+  }> = [];
   private closed = false;
   private failure: Error | null = null;
 
@@ -12,9 +15,9 @@ export class AsyncQueue<T> {
     if (this.closed || this.failure !== null) {
       return;
     }
-    const resolver = this.waitingResolvers.shift();
-    if (resolver !== undefined) {
-      resolver(value);
+    const waiter = this.waitingResolvers.shift();
+    if (waiter !== undefined) {
+      waiter.resolve(value);
       return;
     }
     this.values.push(value);
@@ -26,9 +29,9 @@ export class AsyncQueue<T> {
     }
     this.closed = true;
     while (this.waitingResolvers.length > 0) {
-      const resolver = this.waitingResolvers.shift();
-      if (resolver !== undefined) {
-        resolver(null);
+      const waiter = this.waitingResolvers.shift();
+      if (waiter !== undefined) {
+        waiter.resolve(null);
       }
     }
   }
@@ -39,9 +42,9 @@ export class AsyncQueue<T> {
     }
     this.failure = error;
     while (this.waitingResolvers.length > 0) {
-      const resolver = this.waitingResolvers.shift();
-      if (resolver !== undefined) {
-        resolver(null);
+      const waiter = this.waitingResolvers.shift();
+      if (waiter !== undefined) {
+        waiter.reject(error);
       }
     }
   }
@@ -57,7 +60,7 @@ export class AsyncQueue<T> {
       return null;
     }
 
-    return await new Promise<T | null>((resolve) => {
+    return await new Promise<T | null>((resolve, reject) => {
       let timer: ReturnType<typeof setTimeout> | null = null;
       const wrappedResolve = (value: T | null): void => {
         if (timer !== null) {
@@ -65,10 +68,16 @@ export class AsyncQueue<T> {
         }
         resolve(value);
       };
+      const wrappedReject = (error: Error): void => {
+        if (timer !== null) {
+          clearTimeout(timer);
+        }
+        reject(error);
+      };
 
       if (typeof timeoutMs === "number" && timeoutMs >= 0) {
         timer = setTimeout(() => {
-          const index = this.waitingResolvers.indexOf(wrappedResolve);
+          const index = this.waitingResolvers.findIndex((item) => item.resolve === wrappedResolve);
           if (index >= 0) {
             this.waitingResolvers.splice(index, 1);
           }
@@ -76,7 +85,10 @@ export class AsyncQueue<T> {
         }, timeoutMs);
       }
 
-      this.waitingResolvers.push(wrappedResolve);
+      this.waitingResolvers.push({
+        resolve: wrappedResolve,
+        reject: wrappedReject
+      });
     });
   }
 }

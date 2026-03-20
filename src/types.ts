@@ -40,6 +40,7 @@ export interface ClientOptions {
   token: string;
   baseUrl?: string;
   connectTimeoutMs?: number;
+  streamTimeoutMs?: number;
   reconnectDelayMs?: number;
 }
 
