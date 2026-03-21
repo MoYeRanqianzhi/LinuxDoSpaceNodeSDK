@@ -23,8 +23,17 @@ Important:
 
 ## Install
 
+Preferred release-pinned install for the current published tag `v0.1.0-alpha.1`:
+
 ```bash
-npm install github:MoYeRanqianzhi/LinuxDoSpaceNodeSDK
+npm install https://github.com/MoYeRanqianzhi/LinuxDoSpaceNodeSDK/releases/download/v0.1.0-alpha.1/linuxdospace-0.1.0-alpha.1.tgz
+```
+
+If you intentionally want a Git-based install, pin the same release tag instead
+of the default branch:
+
+```bash
+npm install github:MoYeRanqianzhi/LinuxDoSpaceNodeSDK#v0.1.0-alpha.1
 ```
 
 Local repository development:
@@ -119,6 +128,8 @@ try {
 
 The current release workflow publishes GitHub Release artifacts and `npm pack` tarballs.
 It does not publish to the public npm registry yet.
+Prefer the release tarball or a tag-pinned Git install over the default branch
+so consumers get an audited versioned build instead of moving HEAD.
 
 ## Local Routing Helper
 
