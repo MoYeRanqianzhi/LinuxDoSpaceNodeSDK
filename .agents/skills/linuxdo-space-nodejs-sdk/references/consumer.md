@@ -52,4 +52,3 @@ for await (const item of mailbox.listen(60)) {
 - `route(message)` is local matching only.
 - Full-stream messages use a first-recipient projection address.
 - Mailbox messages use matched-recipient projection addresses.
-

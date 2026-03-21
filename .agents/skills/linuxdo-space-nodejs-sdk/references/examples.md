@@ -24,4 +24,3 @@ const catchAll = client.mail.bind({
 ```ts
 const matches = client.mail.route(message);
 ```
-

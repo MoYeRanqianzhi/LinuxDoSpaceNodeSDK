@@ -45,4 +45,3 @@
 - `listen(...)` returns async iterators.
 - `allowOverlap=false` stops at first match.
 - Regex bindings are full-match local-part regexes.
-

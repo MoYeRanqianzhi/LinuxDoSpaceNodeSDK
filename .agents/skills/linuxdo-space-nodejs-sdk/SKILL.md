@@ -32,4 +32,3 @@ Read [references/development.md](references/development.md) only when editing `s
 - Do not document public npm registry publication; current install path is release tarball or tag-pinned git.
 - Do not confuse `timeoutSeconds` with milliseconds.
 - Do not add hidden pre-listen mailbox buffering.
-
