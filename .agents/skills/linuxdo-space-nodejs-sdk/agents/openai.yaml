@@ -1,0 +1,4 @@
+interface:
+  display_name: "LinuxDoSpace Node.js SDK"
+  short_description: "Use or maintain the LinuxDoSpace Node.js SDK"
+  default_prompt: "Use $linuxdo-space-nodejs-sdk when writing consumer code against sdk/nodejs or when updating the LinuxDoSpace Node.js SDK with matching docs and validation guidance."
