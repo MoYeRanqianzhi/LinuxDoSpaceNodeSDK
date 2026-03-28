@@ -816,7 +816,6 @@ export class Client {
       throw new StreamError(`unexpected mailbox filter sync status code: ${response.status}`);
     }
 
-    await response.text();
     this.syncedMailboxSuffixFragments = fragments;
   }
 

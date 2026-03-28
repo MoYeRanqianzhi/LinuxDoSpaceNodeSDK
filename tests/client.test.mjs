@@ -37,7 +37,19 @@ function createControllableStream() {
 
 function installFetch(mock) {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = mock;
+  globalThis.fetch = async (url, init = {}) => {
+    const normalizedUrl = String(url);
+    const method = String(init.method ?? "GET").toUpperCase();
+    if (normalizedUrl.endsWith("/v1/token/email/filters") && method === "PUT") {
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json"
+        }
+      });
+    }
+    return mock(url, init);
+  };
   return () => {
     globalThis.fetch = originalFetch;
   };
