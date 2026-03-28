@@ -1,7 +1,7 @@
 import { simpleParser } from "mailparser";
 import { AsyncQueue } from "./asyncQueue.js";
 import { AuthenticationError, LinuxDoSpaceError, StreamError } from "./errors.js";
-import { Suffix } from "./types.js";
+import { SemanticSuffix, Suffix } from "./types.js";
 import type { ClientOptions, MailBindingSpec, MailMessage } from "./types.js";
 
 const DEFAULT_BASE_URL = "https://api.linuxdo.space";
@@ -9,6 +9,7 @@ const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
 const DEFAULT_STREAM_TIMEOUT_MS = 30_000;
 const DEFAULT_RECONNECT_DELAY_MS = 300;
 const STREAM_PATH = "/v1/token/email/stream";
+const STREAM_FILTERS_PATH = "/v1/token/email/filters";
 const CONNECT_TIMEOUT_ABORT_REASON = "linuxdospace-connect-timeout";
 const STREAM_TIMEOUT_ABORT_REASON = "linuxdospace-stream-timeout";
 const CLOSE_ABORT_REASON = "linuxdospace-client-close";
@@ -243,7 +244,7 @@ export class MailBindingFacade {
   public bind(input: {
     prefix?: string;
     pattern?: string | RegExp;
-    suffix: Suffix | string;
+    suffix: Suffix | SemanticSuffix | string;
     allowOverlap?: boolean;
   }): MailBox {
     return this.client.createMailbox(input);
@@ -252,7 +253,7 @@ export class MailBindingFacade {
   public spec(input: {
     prefix?: string;
     pattern?: string | RegExp;
-    suffix: Suffix | string;
+    suffix: Suffix | SemanticSuffix | string;
     allowOverlap?: boolean;
   }): MailBindingSpec {
     return {
@@ -289,7 +290,7 @@ export class MailBindingFacade {
   }
 
   public catchAll(input: {
-    suffix: Suffix | string;
+    suffix: Suffix | SemanticSuffix | string;
     pattern?: string | RegExp;
     allowOverlap?: boolean;
   }): MailBox {
@@ -330,6 +331,8 @@ export class Client {
   private fatalError: Error | null = null;
   private activeAbortController: AbortController | null = null;
   private ownerUsername: string | null = null;
+  private syncedMailboxSuffixFragments: readonly string[] | null = null;
+  private mailboxFilterSyncQueue: Promise<void> = Promise.resolve();
   private readonly runnerPromise: Promise<void>;
 
   public readonly mail: MailBindingFacade;
@@ -588,7 +591,7 @@ export class Client {
       throw new StreamError("received stream event without a type field");
     }
     if (type === "ready") {
-      this.handleReadyEvent(payload);
+      await this.handleReadyEvent(payload);
       return;
     }
     if (type === "heartbeat") {
@@ -630,7 +633,17 @@ export class Client {
     }
     const localPart = address.slice(0, splitIndex);
     const suffix = address.slice(splitIndex + 1);
-    const bindings = this.bindingsBySuffix.get(suffix) ?? [];
+    let bindings = this.bindingsBySuffix.get(suffix) ?? [];
+    if (bindings.length === 0) {
+      const ownerUsername = (this.ownerUsername ?? "").trim().toLowerCase();
+      if (ownerUsername.length > 0) {
+        const semanticLegacySuffix = `${ownerUsername}.${Suffix.linuxdo_space}`;
+        const semanticMailSuffix = `${ownerUsername}-mail.${Suffix.linuxdo_space}`;
+        if (suffix === semanticLegacySuffix) {
+          bindings = this.bindingsBySuffix.get(semanticMailSuffix) ?? [];
+        }
+      }
+    }
     const matched: MailBinding[] = [];
 
     for (const binding of bindings) {
@@ -652,7 +665,7 @@ export class Client {
   public normalizeBindingInput(input: {
     prefix?: string;
     pattern?: string | RegExp;
-    suffix: Suffix | string;
+    suffix: Suffix | SemanticSuffix | string;
     allowOverlap?: boolean;
   }): NormalizedBindingInput {
     const hasPrefix = typeof input.prefix === "string";
@@ -701,7 +714,7 @@ export class Client {
   public createMailbox(input: {
     prefix?: string;
     pattern?: string | RegExp;
-    suffix: Suffix | string;
+    suffix: Suffix | SemanticSuffix | string;
     allowOverlap?: boolean;
   }): MailBox {
     this.assertUsable();
@@ -738,13 +751,93 @@ export class Client {
         this.bindingsBySuffix.delete(binding.suffix);
       }
       this.mailboxes.delete(binding.mailbox);
+      this.queueMailboxFilterSync(false);
     };
 
     const mailbox = new MailBox(this, binding, unregister);
     binding.mailbox = mailbox;
     list.push(binding);
     this.mailboxes.add(mailbox);
+    this.queueMailboxFilterSync(true);
     return mailbox;
+  }
+
+  private queueMailboxFilterSync(strict: boolean): void {
+    const run = async (): Promise<void> => {
+      try {
+        await this.syncRemoteMailboxFilters(strict);
+      } catch (error) {
+        if (!strict) {
+          return;
+        }
+        const normalized = normalizeError(error);
+        const syncError =
+          normalized instanceof StreamError
+            ? normalized
+            : new StreamError(`failed to synchronize remote mailbox filters: ${normalized.message}`);
+        this.failAll(syncError);
+      }
+    };
+
+    this.mailboxFilterSyncQueue = this.mailboxFilterSyncQueue.catch(() => undefined).then(run);
+  }
+
+  private async syncRemoteMailboxFilters(strict: boolean): Promise<void> {
+    if (!this.running) {
+      return;
+    }
+    const ownerUsername = (this.ownerUsername ?? "").trim().toLowerCase();
+    if (ownerUsername.length === 0) {
+      return;
+    }
+
+    const fragments = this.collectRemoteMailboxSuffixFragments(ownerUsername);
+    if (fragments.length === 0 && this.syncedMailboxSuffixFragments === null) {
+      return;
+    }
+    if (arraysEqual(this.syncedMailboxSuffixFragments, fragments)) {
+      return;
+    }
+
+    const response = await fetch(`${this.baseUrl}${STREAM_FILTERS_PATH}`, {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${this.token}`,
+        Accept: "application/json",
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ suffixes: fragments })
+    });
+
+    if (!response.ok) {
+      if (!strict) {
+        return;
+      }
+      throw new StreamError(`unexpected mailbox filter sync status code: ${response.status}`);
+    }
+
+    await response.text();
+    this.syncedMailboxSuffixFragments = fragments;
+  }
+
+  private collectRemoteMailboxSuffixFragments(ownerUsername: string): readonly string[] {
+    const rootSuffix = Suffix.linuxdo_space;
+    const canonicalPrefix = `${ownerUsername}-mail`;
+    const fragments = new Set<string>();
+
+    for (const suffix of this.bindingsBySuffix.keys()) {
+      const normalizedSuffix = suffix.trim().toLowerCase();
+      if (!normalizedSuffix.endsWith(`.${rootSuffix}`)) {
+        continue;
+      }
+      const label = normalizedSuffix.slice(0, -(rootSuffix.length + 1));
+      if (label.includes(".") || !label.startsWith(canonicalPrefix)) {
+        continue;
+      }
+      fragments.add(label.slice(canonicalPrefix.length));
+    }
+
+    return Array.from(fragments).sort();
   }
 
   private failAll(error: Error): void {
@@ -767,20 +860,34 @@ export class Client {
     }
   }
 
-  private handleReadyEvent(payload: Record<string, unknown>): void {
+  private async handleReadyEvent(payload: Record<string, unknown>): Promise<void> {
     const ownerUsername = String(payload.owner_username ?? "").trim().toLowerCase();
     if (ownerUsername.length === 0) {
       throw new StreamError("LinuxDoSpace ready event did not include owner_username");
     }
 
     this.ownerUsername = ownerUsername;
+    await this.syncRemoteMailboxFilters(true);
     if (!this.initialSettled) {
       this.initialSettled = true;
       this.resolveInitialReady();
     }
   }
 
-  private resolveBindingSuffix(input: Suffix | string): string {
+  private resolveBindingSuffix(input: Suffix | SemanticSuffix | string): string {
+    if (input instanceof SemanticSuffix) {
+      if (input.base !== Suffix.linuxdo_space) {
+        return String(input.base).trim().toLowerCase();
+      }
+      const ownerUsername = (this.ownerUsername ?? "").trim().toLowerCase();
+      if (ownerUsername.length === 0) {
+        throw new StreamError(
+          "stream bootstrap did not provide owner_username required to resolve Suffix.withSuffix(...)"
+        );
+      }
+      return `${ownerUsername}-mail${input.mailSuffixFragment}.${input.base}`;
+    }
+
     const suffix = String(input).trim().toLowerCase();
     if (suffix.length === 0) {
       return suffix;
@@ -793,7 +900,7 @@ export class Client {
     if (ownerUsername.length === 0) {
       throw new StreamError("stream bootstrap did not provide owner_username required to resolve Suffix.linuxdo_space");
     }
-    return `${ownerUsername}.${suffix}`;
+    return `${ownerUsername}-mail.${suffix}`;
   }
 }
 
@@ -957,6 +1064,13 @@ function normalizeError(error: unknown): Error {
     return error;
   }
   return new Error(String(error));
+}
+
+function arraysEqual(left: readonly string[] | null, right: readonly string[]): boolean {
+  if (left === null || left.length !== right.length) {
+    return false;
+  }
+  return left.every((value, index) => value === right[index]);
 }
 
 function isStrictBase64(value: string): boolean {

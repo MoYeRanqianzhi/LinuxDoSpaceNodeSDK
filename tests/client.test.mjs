@@ -148,6 +148,35 @@ test("client.mail.route preserves bind order and overlap semantics", async () =>
   }
 });
 
+test("semantic suffix also matches the current mail namespace", async () => {
+  const stream = createControllableStream();
+  stream.emitLine(makeReadyLine());
+  const restoreFetch = installFetch(async (_url, init = {}) => {
+    attachAbort(init.signal, stream);
+    return new Response(stream.stream, { status: 200 });
+  });
+
+  const client = await Client.connect({
+    token: "test-token",
+    baseUrl: "http://localhost:8787"
+  });
+
+  try {
+    const alice = client.mail.bind({
+      prefix: "alice",
+      suffix: Suffix.linuxdo_space
+    });
+
+    const routed = client.mail.route(makeMessage("alice@testuser-mail.linuxdo.space"));
+    assert.equal(routed.length, 1);
+    assert.equal(routed[0], alice);
+  } finally {
+    client.close();
+    await client.closed();
+    restoreFetch();
+  }
+});
+
 test("mailboxes receive the concrete recipient address for multi-recipient mail", async () => {
   const stream = createControllableStream();
   const restoreFetch = installFetch(async (_url, init = {}) => {
